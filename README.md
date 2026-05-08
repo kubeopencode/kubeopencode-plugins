@@ -44,8 +44,8 @@ Add to your `opencode.json`:
 
 ### Prerequisites
 
-- Node.js >= 22
-- npm
+- Node.js >= 22 (local development)
+- Node.js >= 24 is used in CI for npm OIDC trusted publishing (npm 11.5.1+ required)
 
 ### Build
 
