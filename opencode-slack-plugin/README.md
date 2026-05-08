@@ -97,15 +97,17 @@ opencode
 
 **Serve mode** (headless server — plugin loads on first request):
 
+`opencode serve` uses lazy instance loading — plugins only initialize when
+the first HTTP request arrives for a project directory. In KubeOpenCode,
+the Kubernetes StartupProbe (`GET /session/status`) triggers this automatically.
+For local testing, send a warmup request manually:
+
 ```bash
 # Start the server
 opencode serve &
 
-# Send a warmup request to trigger plugin loading.
-# opencode serve uses lazy instance loading — plugins only initialize
-# when the first request arrives for a project directory.
-# This curl triggers that initialization so Slack Socket Mode connects.
-sleep 1 && curl -s http://127.0.0.1:4096/session?directory=$(pwd) > /dev/null
+# Send a warmup request to trigger plugin loading
+sleep 1 && curl -s "http://127.0.0.1:4096/session/status?directory=$(pwd)" > /dev/null
 
 # The server is now running with Slack connected.
 # Look for "[slack-plugin] Slack Socket Mode connected" in the output.
