@@ -299,6 +299,25 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
   }
 
   // ------------------------------------------------------------------
+  // Set typing indicator ("is thinking...") in Slack thread
+  // ------------------------------------------------------------------
+  // Uses assistant.threads.setStatus which shows "<Bot Name> is thinking..."
+  // in the thread. The status auto-clears when the bot posts a message.
+  // Falls back silently if the API is unavailable (e.g., missing scope).
+
+  async function setTypingStatus(channel: string, thread: string, status = "is thinking...") {
+    try {
+      await web.apiCall("assistant.threads.setStatus", {
+        channel_id: channel,
+        thread_ts: thread,
+        status,
+      })
+    } catch {
+      // Best-effort — don't fail the message flow if status API is unavailable
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Get or create an OpenCode session for a Slack thread
   // ------------------------------------------------------------------
 
@@ -346,11 +365,12 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
       evictOldestSession()
     }
 
-    // Share session link in thread
+    // Log session share link (not posted to Slack — too low-level for users).
+    // Visible in OpenCode server logs: look for "[slack-plugin] Session share:"
     try {
       const shareResult = await client.session.share({ path: { id: result.data.id } })
       if (!shareResult.error && shareResult.data?.share?.url) {
-        await postToThread(channel, thread, `Session: ${shareResult.data.share.url}`)
+        console.log(`${LOG_PREFIX} Session share: ${shareResult.data.share.url} (thread: ${key})`)
       }
     } catch {
       // Share is optional
@@ -484,6 +504,9 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
 
     session.lastActive = Date.now()
 
+    // Show typing indicator while processing
+    setTypingStatus(channel, thread)
+
     // Enqueue the prompt to serialize concurrent messages in the same session.
     // OpenCode silently drops prompt() calls on a busy session (the message is
     // written to DB but runLoop never starts), so we must serialize here.
@@ -499,13 +522,24 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
         return
       }
 
-      const responseText =
-        (result.data as any).parts
-          ?.filter((p: any) => p.type === "text")
-          .map((p: any) => ("text" in p ? p.text : ""))
-          .join("\n") || "I received your message but didn't have a response."
+      // Extract text from response parts. The response shape is
+      // { info: AssistantMessage, parts: Part[] } where Part can be
+      // { type: "text", text: string } or tool/step parts.
+      const data = result.data as any
+      const parts = data?.parts ?? []
+      const textParts = parts
+        .filter((p: any) => p.type === "text" && p.text)
+        .map((p: any) => p.text)
 
-      await postToThread(channel, thread, responseText)
+      if (textParts.length === 0) {
+        // No text in response — log the raw data for debugging but don't
+        // show a confusing fallback message to the user. The session.idle
+        // event or subsequent messages will follow.
+        console.warn(`${LOG_PREFIX} Empty text response for session ${session.sessionId}:`, JSON.stringify(data).slice(0, 500))
+        return
+      }
+
+      await postToThread(channel, thread, textParts.join("\n"))
     })
   }
 
@@ -650,27 +684,28 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
     event: async ({ event }) => {
       const evt = event as any
 
-      // Forward tool completion updates to the relevant Slack thread
+      // Log tool completion events (not posted to Slack — too noisy for users).
+      // Visible in OpenCode server logs: look for "[slack-plugin] Tool:"
       if (evt.type === "message.part.updated") {
         const part = evt.properties?.part
         if (part?.type === "tool" && part.state?.status === "completed" && part.sessionID) {
           const session = findSessionByOpenCodeId(part.sessionID)
           if (session) {
-            const toolMsg = `*${part.tool}* — ${part.state.title || "completed"}`
-            postToThread(session.channel, session.thread, toolMsg).catch(() => {})
+            console.log(`${LOG_PREFIX} Tool: ${part.tool} — ${part.state.title || "completed"} (session: ${session.sessionId})`)
+            // Refresh typing status so the user knows the bot is still working
+            setTypingStatus(session.channel, session.thread, "is working...")
           }
         }
       }
 
-      // Notify Slack thread when the session finishes processing (idle).
-      // This gives users a clear signal that the bot is done and ready
-      // for the next message, which is especially useful for long tasks.
+      // Log session idle events (not posted to Slack).
+      // Visible in OpenCode server logs: look for "[slack-plugin] Session idle:"
       if (evt.type === "session.idle") {
         const sessionId = evt.properties?.sessionID ?? evt.properties?.id
         if (sessionId) {
           const session = findSessionByOpenCodeId(sessionId)
           if (session) {
-            postToThread(session.channel, session.thread, "_Session idle — ready for next message._").catch(() => {})
+            console.log(`${LOG_PREFIX} Session idle: ${session.sessionId}`)
           }
         }
       }
