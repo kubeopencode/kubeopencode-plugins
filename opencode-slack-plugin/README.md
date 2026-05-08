@@ -120,7 +120,6 @@ The plugin activates automatically when both `SLACK_BOT_TOKEN` and `SLACK_APP_TO
 - **DM the bot** directly for private conversations
 - **@mention the bot** in a channel to start a threaded conversation
 - Each Slack thread creates a separate OpenCode session with its own context
-- Session share links are posted automatically when a new thread starts
 
 ### Permission Requests
 
@@ -147,6 +146,87 @@ Completed tool calls are posted to the thread in real time:
 ```
 *file_write* - wrote src/index.ts
 *bash* - ran tests
+```
+
+## Debugging
+
+### Log Locations
+
+The plugin produces two categories of logs:
+
+| Source | Location | Contents |
+|--------|----------|----------|
+| **OpenCode structured log** | `~/.local/share/opencode/log/` | Session lifecycle, LLM calls, tool execution, permission events, errors. File per startup, 10 most recent retained. |
+| **Plugin console output** | OpenCode process stdout/stderr | `[slack-plugin]` prefixed messages: connection status, session creation, typing indicators, prompt results. |
+
+To find the current log directory:
+
+```bash
+opencode debug paths   # prints all paths including "log"
+```
+
+On macOS the default is `~/.local/share/opencode/log/`. On Linux it follows `$XDG_DATA_HOME/opencode/log/`.
+
+### Investigating a Failed Slack Message
+
+When a Slack message gets no reply, follow this sequence:
+
+**1. Find the session ID** — look for `[slack-plugin] Created session` in stdout, or find the session by thread timestamp:
+
+```bash
+grep "Slack thread" ~/.local/share/opencode/log/2026-05-08T*.log
+```
+
+**2. Trace the session in the structured log** — search for the session ID to see the full lifecycle:
+
+```bash
+grep "ses_XXXXX" ~/.local/share/opencode/log/2026-05-08T*.log
+```
+
+Key events to look for:
+
+| Log entry | Meaning |
+|-----------|---------|
+| `service=session ... created` | Session was created successfully |
+| `service=session.prompt step=0 loop` | LLM prompt loop started |
+| `service=llm ... stream` | LLM call initiated |
+| `service=llm ... stream error` | LLM call failed (check `error=` field) |
+| `service=session.processor ... error=` | Processor crashed while handling LLM response |
+| `service=session.prompt ... exiting loop` | Prompt completed normally |
+| `service=permission ... evaluated` | Permission was auto-resolved or user-replied |
+
+**3. Check for LLM provider errors** — filter for ERROR level:
+
+```bash
+grep "ERROR.*ses_XXXXX" ~/.local/share/opencode/log/2026-05-08T*.log
+```
+
+### Common Failure Modes
+
+**Bot shows "is thinking..." but never replies:**
+
+The plugin's `session.prompt()` returned data with no text parts. This happens when the LLM provider fails. Check the structured log for `stream error` — common causes:
+
+- **OAuth token expired** (Google Vertex): `POST https://oauth2.googleapis.com/token` fails. Fix: `gcloud auth application-default login`
+- **Proxy misconfiguration**: The LLM provider's HTTP client inherits `http_proxy`/`https_proxy` env vars. If your proxy is down, LLM calls fail silently.
+- **Rate limiting**: Look for HTTP 429 in the error JSON.
+
+**Bot creates a session but the second message in the thread is ignored:**
+
+The thread requires `@mention` for each message in channel threads (by design — prevents capturing human-to-human conversation). DMs do not require `@mention`.
+
+**"Session idle" appears in stdout but no Slack message:**
+
+This means `session.prompt()` completed but returned empty text parts. Search the structured log for `ERROR` entries on that session ID to find the root cause.
+
+### Enabling Verbose Logging
+
+```bash
+# Print logs to stderr instead of file (useful for local debugging)
+opencode serve --print-logs
+
+# Set log level to DEBUG for maximum detail
+opencode serve --log-level DEBUG
 ```
 
 ## KubeOpenCode Integration

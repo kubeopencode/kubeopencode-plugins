@@ -134,6 +134,54 @@ Plugins may run in multiple Agent pods simultaneously. Design for this:
 - Session maps are keyed by unique identifiers (e.g., Slack channel + thread timestamp)
 - Bounded collections with eviction to prevent memory leaks
 
+## Debugging Plugins
+
+### Log Locations
+
+OpenCode writes structured logs (session lifecycle, LLM calls, tool execution, errors) to:
+
+```
+~/.local/share/opencode/log/    # macOS/Linux default ($XDG_DATA_HOME/opencode/log/)
+```
+
+Files are named `YYYY-MM-DDTHHMMSS.log` (one per startup, 10 most recent retained). Run `opencode debug paths` to confirm the path on your system.
+
+Plugin `console.log`/`console.warn`/`console.error` output goes to the OpenCode process stdout/stderr — it is **not** captured in the structured log file. Use the `[plugin-name]` prefix convention to make plugin output easy to filter.
+
+### Tracing a Problem
+
+1. **Find the session** — search the log for the session ID or creation event:
+   ```bash
+   grep "ses_XXXXX" ~/.local/share/opencode/log/*.log
+   ```
+
+2. **Check for errors** — LLM failures, processor crashes, permission timeouts:
+   ```bash
+   grep "ERROR.*ses_XXXXX" ~/.local/share/opencode/log/*.log
+   ```
+
+3. **Key log markers**:
+   - `service=session ... created` — session created
+   - `service=session.prompt step=N loop` — prompt loop iteration N
+   - `service=llm ... stream` — LLM call started
+   - `service=llm ... stream error` — LLM call failed (root cause in `error=` JSON)
+   - `service=session.processor ... error=` — processor crash
+   - `service=session.prompt ... exiting loop` — prompt completed normally
+
+### CLI Flags for Debugging
+
+```bash
+opencode serve --print-logs       # logs to stderr instead of file
+opencode serve --log-level DEBUG  # maximum verbosity
+```
+
+Both can also be set in `opencode.json`:
+```json
+{
+  "logLevel": "DEBUG"
+}
+```
+
 ## Repository Structure
 
 ```

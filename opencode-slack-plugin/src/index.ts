@@ -13,6 +13,7 @@ type SessionEntry = {
   channel: string
   thread: string
   lastActive: number
+  firstPrompt: boolean // true until the first prompt is sent
   // Per-thread pending permission — avoids cross-thread interference
   // when multiple users chat with the bot simultaneously.
   // Stores both requestId (for new API) and permissionId/sessionId (for v1 fallback).
@@ -32,6 +33,19 @@ const MAX_SLACK_TEXT = 3900 // Slack limit is 4000, leave headroom
 const MAX_SESSIONS = 500
 const LOG_PREFIX = "[slack-plugin]"
 const PERMISSION_TIMEOUT_MS = 5 * 60_000 // 5 min — auto-clear stale permission
+
+// Injected as the first message in each new Slack thread session.
+// Tells the LLM it is responding in Slack and should use Slack mrkdwn formatting.
+const SLACK_SYSTEM_CONTEXT = [
+  "This conversation is happening in Slack.",
+  "Format your responses using Slack mrkdwn syntax:",
+  "- *bold*, _italic_, ~strikethrough~, `inline code`",
+  "- ```code blocks``` (no language specifier after backticks)",
+  "- Bulleted lists with •  or -",
+  "- Links: <url|display text>",
+  "- Do NOT use Markdown headings (#, ##), HTML tags, or [text](url) link syntax — they do not render in Slack.",
+  "Keep responses concise and conversational.",
+].join("\n")
 
 // ---------------------------------------------------------------------------
 // PromptQueue: serializes prompt calls per session
@@ -355,6 +369,7 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
       channel,
       thread,
       lastActive: Date.now(),
+      firstPrompt: true,
       pendingPermission: null,
     }
     sessions.set(key, entry)
@@ -363,17 +378,6 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
     // Evict least-recently-used entry if map grows too large
     if (sessions.size > MAX_SESSIONS) {
       evictOldestSession()
-    }
-
-    // Log session share link (not posted to Slack — too low-level for users).
-    // Visible in OpenCode server logs: look for "[slack-plugin] Session share:"
-    try {
-      const shareResult = await client.session.share({ path: { id: result.data.id } })
-      if (!shareResult.error && shareResult.data?.share?.url) {
-        console.log(`${LOG_PREFIX} Session share: ${shareResult.data.share.url} (thread: ${key})`)
-      }
-    } catch {
-      // Share is optional
     }
 
     return entry
@@ -507,13 +511,22 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
     // Show typing indicator while processing
     setTypingStatus(channel, thread)
 
+    // Prepend Slack formatting context on the first prompt of each thread.
+    // Subsequent messages in the same thread skip this — the LLM already has
+    // the context in its conversation history.
+    let promptText = text
+    if (session.firstPrompt) {
+      promptText = `<system-reminder>\n${SLACK_SYSTEM_CONTEXT}\n</system-reminder>\n\n${text}`
+      session.firstPrompt = false
+    }
+
     // Enqueue the prompt to serialize concurrent messages in the same session.
     // OpenCode silently drops prompt() calls on a busy session (the message is
     // written to DB but runLoop never starts), so we must serialize here.
     promptQueue.enqueue(session.sessionId, async () => {
       const result = await client.session.prompt({
         path: { id: session.sessionId },
-        body: { parts: [{ type: "text", text }] },
+        body: { parts: [{ type: "text", text: promptText }] },
       })
 
       if (result.error) {
