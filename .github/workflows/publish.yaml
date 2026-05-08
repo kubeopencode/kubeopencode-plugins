@@ -1,0 +1,62 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      # e.g. opencode-slack-plugin/v0.1.0
+      - "*/v*"
+
+permissions:
+  contents: read
+  id-token: write # Required for npm OIDC trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 ships with npm 11.5.1+ which is required for OIDC trusted publishing
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      # Extract plugin directory from tag (e.g. "opencode-slack-plugin/v0.1.0" -> "opencode-slack-plugin")
+      - name: Determine plugin directory
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PLUGIN_DIR="${TAG%/v*}"
+          VERSION="${TAG#*/v}"
+          echo "plugin_dir=${PLUGIN_DIR}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${PLUGIN_DIR} v${VERSION}"
+
+      - name: Install dependencies
+        working-directory: ${{ steps.meta.outputs.plugin_dir }}
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: ${{ steps.meta.outputs.plugin_dir }}
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: ${{ steps.meta.outputs.plugin_dir }}
+        run: npm run build
+
+      - name: Verify version matches tag
+        working-directory: ${{ steps.meta.outputs.plugin_dir }}
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${{ steps.meta.outputs.version }}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag version ($TAG_VERSION)"
+            exit 1
+          fi
+
+      # No NPM_TOKEN needed — OIDC trusted publishing handles authentication
+      - name: Publish to npm
+        working-directory: ${{ steps.meta.outputs.plugin_dir }}
+        run: npm publish --access public

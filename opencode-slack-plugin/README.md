@@ -46,13 +46,13 @@ Your machine (MacBook / Linux / K8s Pod)
 
 ### 2. Install the Plugin
 
-#### From npm (once published)
+#### From npm
 
 Add to your `opencode.json`:
 
 ```json
 {
-  "plugin": ["opencode-slack-plugin"]
+  "plugin": ["@kubeopencode/opencode-slack-plugin"]
 }
 ```
 

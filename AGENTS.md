@@ -186,24 +186,35 @@ Both can also be set in `opencode.json`:
 
 ```
 kubeopencode-plugins/
-  AGENTS.md                       # This file
-  opencode-slack-plugin/          # Slack Socket Mode integration
-    src/index.ts                  # Plugin source
-    package.json                  # npm package config
+  README.md                         # Project overview and quick start
+  AGENTS.md                         # This file (AI agent dev guidelines)
+  Makefile                          # Build and release targets
+  .github/workflows/publish.yaml   # CI: automated npm publish on tag
+  opencode-slack-plugin/            # Slack Socket Mode integration
+    src/index.ts                    # Plugin source
+    package.json                    # npm package config (@kubeopencode scope)
     tsconfig.json
-    dist/                         # Built output (tsup)
-    README.md                     # Setup instructions
+    dist/                           # Built output (tsup)
+    README.md                       # Setup instructions
 ```
 
 ## Development
 
 ### Building a Plugin
 
+Use the Makefile at the repo root:
+
 ```bash
-cd opencode-slack-plugin
-npm install
-npm run typecheck    # tsc --noEmit
-npm run build        # tsup -> dist/
+make install      # npm install
+make typecheck    # tsc --noEmit
+make build        # tsup -> dist/
+make clean        # remove dist/
+```
+
+To target a specific plugin (when multiple plugins exist):
+
+```bash
+make build PLUGIN_DIR=opencode-slack-plugin
 ```
 
 ### Testing Locally
@@ -233,12 +244,64 @@ metadata:
   name: my-agent
 spec:
   plugins:
-    - name: "opencode-slack-plugin"
+    - name: "@kubeopencode/opencode-slack-plugin"
   credentials:
     - secretRef:
         name: slack-credentials
   # ...
 ```
+
+## Release Process
+
+Releases are automated via GitHub Actions using **npm OIDC Trusted Publishing**. No npm tokens or secrets are required — authentication uses short-lived OIDC credentials tied to the specific workflow.
+
+### How to release a plugin
+
+1. **Bump the version** in the plugin's `package.json`:
+
+   ```bash
+   cd opencode-slack-plugin
+   npm version patch   # or minor / major
+   ```
+
+2. **Commit and push** the version bump:
+
+   ```bash
+   git add -A
+   git commit -s -m "release: opencode-slack-plugin v0.1.1"
+   git push origin main
+   ```
+
+3. **Tag and push** to trigger CI:
+
+   ```bash
+   make release   # reads version from package.json, creates and pushes tag
+   ```
+
+   The tag format is `<plugin-dir>/v<version>` (e.g. `opencode-slack-plugin/v0.1.0`). This supports independent versioning per plugin.
+
+### What CI does
+
+The `.github/workflows/publish.yaml` workflow:
+
+1. Extracts the plugin directory and version from the git tag
+2. Runs `npm ci` → `typecheck` → `build`
+3. Verifies `package.json` version matches the tag version
+4. Publishes to npm with OIDC authentication and provenance attestation
+
+### First-time setup for a new plugin
+
+OIDC Trusted Publishing requires the package to already exist on npm:
+
+1. Publish v0.1.0 manually: `npm login && make publish PLUGIN_DIR=my-new-plugin`
+2. On npmjs.com, go to the package settings and add a Trusted Publisher:
+   - Owner: `kubeopencode`, Repository: `kubeopencode-plugins`
+   - Workflow: `publish.yaml`, Environment: `release`
+3. Ensure the `release` environment exists in the GitHub repo settings
+
+### npm package naming
+
+All plugins are published under the `@kubeopencode` npm scope (e.g. `@kubeopencode/opencode-slack-plugin`). The `package.json` `name` field must use this scoped format.
 
 ## Style Guide
 
