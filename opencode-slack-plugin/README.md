@@ -89,10 +89,26 @@ export SLACK_APP_TOKEN=xapp-your-app-token
 
 ### 4. Run OpenCode
 
+**TUI mode** (interactive terminal — plugin loads automatically):
+
 ```bash
-opencode serve
-# or just
 opencode
+```
+
+**Serve mode** (headless server — plugin loads on first request):
+
+```bash
+# Start the server
+opencode serve &
+
+# Send a warmup request to trigger plugin loading.
+# opencode serve uses lazy instance loading — plugins only initialize
+# when the first request arrives for a project directory.
+# This curl triggers that initialization so Slack Socket Mode connects.
+sleep 1 && curl -s http://127.0.0.1:4096/session?directory=$(pwd) > /dev/null
+
+# The server is now running with Slack connected.
+# Look for "[slack-plugin] Slack Socket Mode connected" in the output.
 ```
 
 The plugin activates automatically when both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are set. If either is missing, the plugin silently skips initialization.
