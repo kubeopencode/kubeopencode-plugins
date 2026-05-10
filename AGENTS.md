@@ -303,6 +303,74 @@ OIDC Trusted Publishing requires the package to already exist on npm:
 
 All plugins are published under the `@kubeopencode` npm scope (e.g. `@kubeopencode/opencode-slack-plugin`). The `package.json` `name` field must use this scoped format.
 
+## CJS/ESM Interop (Critical)
+
+OpenCode plugins run inside **Bun's JavaScript runtime**, not Node.js. Bun's CJS/ESM interop differs from Node.js in ways that cause silent failures for CJS packages that use `Object.defineProperty` (getter/setter) for their exports.
+
+### The Problem
+
+Packages like `@slack/web-api` and `@slack/socket-mode` are **CJS modules** that export classes via `Object.defineProperty`:
+
+```js
+// @slack/web-api/dist/index.js
+Object.defineProperty(exports, "WebClient", { enumerable: true, get: function() { return ... } });
+```
+
+In **Node.js**, `import { WebClient } from "@slack/web-api"` works because Node creates a live binding to the getter. But **Bun** (which OpenCode uses internally to load plugins via `await import()`) creates a namespace object that **drops getter-defined properties**. This means:
+
+| Import style | Node.js | Bun (OpenCode runtime) |
+|---|---|---|
+| `import { WebClient }` | ✅ | ❌ `undefined` |
+| `import * as M; M.WebClient` | ✅ | ❌ `undefined` |
+| `const { WebClient } = await import(...)` | ✅ | ❌ `undefined` |
+| `createRequire()(...).WebClient` | ✅ | ❌ `require() async module unsupported` |
+
+All approaches fail. The error manifests as:
+
+```
+undefined is not a constructor (evaluating 'new WebClient(botToken)')
+```
+
+### The Solution: Bundle CJS Dependencies
+
+**Always bundle CJS dependencies into the plugin output.** This eliminates runtime CJS/ESM interop entirely — tsup's bundler resolves all exports at build time using `__commonJS` wrappers that correctly handle `Object.defineProperty`.
+
+**Configuration:**
+
+1. Move CJS dependencies from `dependencies` to `devDependencies` in `package.json`:
+
+   ```json
+   {
+     "dependencies": {},
+     "devDependencies": {
+       "@slack/web-api": "^7.13.0",
+       "@slack/socket-mode": "^2.0.5"
+     }
+   }
+   ```
+
+2. tsup automatically bundles `devDependencies` — no extra config needed. Dependencies listed in `dependencies` are treated as external (left as `import` statements in the output).
+
+3. Use standard named imports in source:
+
+   ```ts
+   import { WebClient } from "@slack/web-api"
+   import { SocketModeClient } from "@slack/socket-mode"
+   ```
+
+**Trade-off:** The bundle grows from ~17KB to ~830KB when including `@slack/web-api`. This is acceptable for a plugin that runs once per Agent pod.
+
+### Detection Checklist
+
+If a plugin dependency uses CJS (`"type"` is not `"module"` or absent in `package.json`, `main` points to a `.js` file without ESM exports), and uses `Object.defineProperty` for exports, it **must** be bundled. Check with:
+
+```bash
+# Does the package use Object.defineProperty for exports?
+grep "Object.defineProperty(exports" node_modules/<pkg>/dist/index.js
+```
+
+If you see `Object.defineProperty(exports, "ClassName"`, the package has this issue and **must** be bundled.
+
 ## Style Guide
 
 - TypeScript, ESM (`"type": "module"`)
@@ -311,3 +379,4 @@ All plugins are published under the `@kubeopencode` npm scope (e.g. `@kubeopenco
 - Avoid `try/catch` when possible; use `.catch(() => {})` for best-effort operations
 - Keep each plugin in a single file unless complexity demands splitting
 - English comments only
+- **CJS dependencies must be bundled** (see CJS/ESM Interop section above)
