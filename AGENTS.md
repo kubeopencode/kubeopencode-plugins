@@ -358,7 +358,37 @@ undefined is not a constructor (evaluating 'new WebClient(botToken)')
    import { SocketModeClient } from "@slack/socket-mode"
    ```
 
-**Trade-off:** The bundle grows from ~17KB to ~830KB when including `@slack/web-api`. This is acceptable for a plugin that runs once per Agent pod.
+**Trade-off:** The bundle grows from ~17KB to ~708KB when including `@slack/web-api`. This is acceptable for a plugin that runs once per Agent pod.
+
+### WebSocket (ws) + Bun Compatibility
+
+The `ws` library (used by `@slack/socket-mode` for WebSocket connections) depends on Node.js built-in modules (`http`, `https`, `net`, `tls`, etc.). When bundled with tsup, `ws` uses a `__require` polyfill at runtime that **does not** map to Bun's native implementations. This causes:
+
+```
+[ERROR] socket-mode:SlackWebSocket WebSocket error occurred: Unexpected server response: 101
+```
+
+HTTP 101 is the WebSocket upgrade response — `ws` treats it as an error because it's using the polyfilled `http`/`https` modules instead of Bun's native WebSocket.
+
+**Solution:** Mark `ws` and all Node.js built-in modules as `external` in tsup. This forces runtime resolution via Bun's compatibility layer, which provides native `ws` support:
+
+```ts
+// tsup.config.ts
+import { defineConfig } from "tsup"
+
+export default defineConfig({
+  entry: ["src/index.ts"],
+  format: ["esm"],
+  dts: true,
+  clean: true,
+  noExternal: ["@slack/web-api", "@slack/socket-mode", "@slack/types", "@slack/logger"],
+  external: ["ws", "http", "https", "net", "tls", "crypto", "stream", "events", "url", "zlib", "bufferutil", "utf-8-validate"],
+})
+```
+
+Keep `@slack/*` in `dependencies` so that `plugin-init` installs them (and their `ws` dependency) via npm. The `noExternal` setting ensures `@slack/*` source is bundled, while `external` ensures `ws` and Node.js builtins are resolved at runtime by Bun.
+
+**Detection:** If a bundled plugin uses WebSocket connections and fails with "Unexpected server response: 101", check whether `ws` was bundled by searching for `require_ws` or `__require("http")` in the output. If found, add `ws` and Node.js builtins to the `external` list.
 
 ### Detection Checklist
 
