@@ -1,15 +1,16 @@
 // Copyright Contributors to the KubeOpenCode project
 import type { PluginModule, PluginInput, Hooks } from "@opencode-ai/plugin"
-// CJS/ESM interop: @slack/web-api and @slack/socket-mode are CommonJS modules.
-// Named imports (e.g. import { WebClient }) fail in Bun's ESM loader because
-// the exports are defined via Object.defineProperty — not resolvable by static
-// analysis. Namespace imports work because they import the entire module.exports
-// object and destructure at runtime.
-import * as SlackWebApi from "@slack/web-api"
-import * as SlackSocketMode from "@slack/socket-mode"
+import { createRequire } from "node:module"
 import * as os from "os"
-const { WebClient } = SlackWebApi
-const { SocketModeClient } = SlackSocketMode
+// CJS/ESM interop: @slack/web-api and @slack/socket-mode are CommonJS modules
+// that use Object.defineProperty for their exports. Bun's bundler cannot
+// resolve named imports from these (it produces "X is not a constructor" at
+// runtime). Namespace imports (import * as) also fail because Bun's bundled
+// namespace object loses the getter-defined properties. Using createRequire to
+// load them as CJS guarantees the real module.exports with all constructors.
+const require = createRequire(import.meta.url)
+const { WebClient } = require("@slack/web-api") as typeof import("@slack/web-api")
+const { SocketModeClient } = require("@slack/socket-mode") as typeof import("@slack/socket-mode")
 
 // ---------------------------------------------------------------------------
 // Types
