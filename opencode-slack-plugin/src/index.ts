@@ -1,16 +1,8 @@
 // Copyright Contributors to the KubeOpenCode project
 import type { PluginModule, PluginInput, Hooks } from "@opencode-ai/plugin"
+import { WebClient } from "@slack/web-api"
+import { SocketModeClient } from "@slack/socket-mode"
 import * as os from "os"
-// CJS/ESM interop: @slack/web-api and @slack/socket-mode are CJS modules that
-// use Object.defineProperty for their exports. Bun's bundler cannot resolve
-// named imports (produces "X is not a constructor"), namespace imports lose
-// getter-defined properties in the bundled namespace, and require() is blocked
-// by Bun for async CJS modules. Dynamic import() forces Bun to handle the
-// interop at runtime, preserving all exports including constructors.
-const slackWebApi = await import("@slack/web-api") as typeof import("@slack/web-api")
-const slackSocketMode = await import("@slack/socket-mode") as typeof import("@slack/socket-mode")
-const { WebClient } = slackWebApi
-const { SocketModeClient } = slackSocketMode
 
 // ---------------------------------------------------------------------------
 // Types
@@ -219,7 +211,6 @@ const slack = async (input: PluginInput): Promise<Hooks> => {
   const appToken = process.env.SLACK_APP_TOKEN
 
   if (!botToken || !appToken) {
-    // Not configured — silently skip.
     return {}
   }
 
